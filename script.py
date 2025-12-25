@@ -11,7 +11,7 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 # Substitua pelo link REAL do seu arquivo
 URL_DADOS = "https://www.gpro.net/gb/GetMarketFile.asp?market=drivers&type=csv" 
 TABELA_NOME = "mercado_pilotos"
-COLUNA_ID = "id_piloto" # Certifique-se que o CSV tem essa coluna (ex: id, driverId, etc)
+COLUNA_ID = "ID" # Certifique-se que o CSV tem essa coluna (ex: id, driverId, etc)
 
 def get_engine_blindada():
     """Limpa o link e prepara a engine"""
