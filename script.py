@@ -8,119 +8,124 @@ from urllib.parse import urlparse
 
 # --- CONFIGURAÇÕES ---
 DATABASE_URL = os.getenv('DATABASE_URL')
-URL_DADOS = "https://www.gpro.net/gb/GetMarketFile.asp?market=drivers&type=csv" # CONFIRME SE O LINK É ESSE
+# Substitua pelo link REAL do seu arquivo
+URL_DADOS = "https://gproworld.org/download/pilotos.csv.gz" 
 TABELA_NOME = "mercado_pilotos"
-COLUNA_ID = "id_piloto" 
+COLUNA_ID = "id_piloto" # Certifique-se que o CSV tem essa coluna (ex: id, driverId, etc)
 
 def get_engine_blindada():
-    """
-    Função robusta que limpa o link de conexão na força bruta
-    para evitar erros de SSL do Aiven/SQLAlchemy.
-    """
+    """Limpa o link e prepara a engine"""
     if not DATABASE_URL:
         raise ValueError("A variável DATABASE_URL está vazia!")
 
-    # 1. Parse do link original (separa usuário, senha, host, etc)
-    # Removemos o prefixo mysql+pymysql:// temporariamente para o urlparse entender
     url_str = DATABASE_URL.replace("mysql+pymysql://", "mysql://")
     parsed = urlparse(url_str)
-
-    # 2. Debug (Sem mostrar a senha)
-    print(f"--- DEBUG CONEXÃO ---")
-    print(f"Host detectado: {parsed.hostname}")
-    print(f"Banco detectado: {parsed.path[1:]}") # Remove a barra inicial
-    print(f"Query params removidos: {parsed.query}") # Mostra o que estamos jogando fora (ex: ssl-mode)
     
-    # 3. Reconstrução Limpa
-    # Montamos a string manualmente apenas com o necessário
-    # Formato: mysql+pymysql://USER:PASS@HOST:PORT/DB_NAME
+    # Reconstrói o link limpo (sem lixo de query params)
     conn_str_limpa = f"mysql+pymysql://{parsed.username}:{parsed.password}@{parsed.hostname}:{parsed.port}{parsed.path}"
     
-    print("Link reconstruído e limpo com sucesso.")
-    print("---------------------")
-
-    # 4. Cria a engine injetando o SSL corretamente via argumentos, não via link
     return create_engine(
         conn_str_limpa, 
         connect_args={'ssl': {'check_hostname': False}}
     )
 
 def main():
-    print("Iniciando Script...")
+    print("Iniciando Script (Correção CSV + PK)...")
     
     try:
         engine = get_engine_blindada()
     except Exception as e:
-        print(f"ERRO FATAL NA CONFIGURAÇÃO: {e}")
+        print(f"ERRO DE CONFIG: {e}")
         return
 
-    # 1. Teste de Conexão Rápido
-    print("Testando conexão com o banco...")
+    # --- TRUQUE PARA O AIVEN ---
+    # Tenta desativar a exigência de Primary Key para esta sessão
     try:
         with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        print("-> Conexão OK!")
+            conn.execute(text("SET SESSION sql_require_primary_key = 0"))
+            print("-> Trava de Primary Key desativada temporariamente.")
     except Exception as e:
-        print(f"ERRO AO CONECTAR: {e}")
-        return
+        print(f"AVISO: Não foi possível desativar a trava de PK: {e}")
+        # Se falhar, o script tenta continuar, mas pode dar erro no to_sql depois
 
-    # 2. Carregar dados antigos
+    # 1. Carregar dados antigos
     try:
-        print(f"Lendo tabela '{TABELA_NOME}'...")
         df_db = pd.read_sql(TABELA_NOME, engine)
-        print(f"-> {len(df_db)} registros existentes.")
+        print(f"-> Banco: {len(df_db)} registros carregados.")
     except Exception:
-        print("-> Tabela nova ou vazia.")
+        print("-> Banco: Tabela nova ou vazia.")
         df_db = pd.DataFrame()
 
-    # 3. Baixar Dados
+    # 2. Baixar e Ler CSV (Com correção de formato)
     print("Baixando CSV...")
     try:
         response = requests.get(URL_DADOS)
         response.raise_for_status()
         
         with gzip.open(io.BytesIO(response.content), 'rt') as f:
-            # ATENÇÃO: Verifique se o CSV usa vírgula ou ponto e vírgula
-            # Se der erro de colunas, troque para sep=';'
-            df_novo = pd.read_csv(f)
-            
+            # TENTATIVA 1: Ler pulando a primeira linha (se tiver 'sep=')
+            try:
+                # header=0 significa que a linha 0 (pós skip) é o cabeçalho
+                df_novo = pd.read_csv(f, skiprows=1) 
+                
+                # Verificação de sanidade: Se as colunas parecerem erradas, tenta sem pular
+                if "id" not in str(df_novo.columns).lower() and len(df_novo.columns) < 2:
+                    print("-> Aviso: Leitura com skiprows=1 pareceu estranha. Tentando leitura normal...")
+                    f.seek(0) # Volta pro começo do arquivo
+                    df_novo = pd.read_csv(f)
+            except:
+                f.seek(0)
+                df_novo = pd.read_csv(f)
+
+        # Normaliza nomes de colunas (tira espaços e deixa minúsculo)
+        df_novo.columns = [c.strip() for c in df_novo.columns]
+        
+        # IMPORTANTE: Confere se a coluna ID existe mesmo
+        if COLUNA_ID not in df_novo.columns:
+            print(f"ERRO CRÍTICO: Coluna '{COLUNA_ID}' não encontrada no CSV!")
+            print(f"Colunas detectadas: {list(df_novo.columns)}")
+            # Tenta achar uma coluna parecida automaticamente
+            possiveis = [c for c in df_novo.columns if 'id' in c.lower()]
+            if possiveis:
+                print(f"Sugestão: Talvez o ID seja '{possiveis[0]}'?")
+            return
+
         from datetime import datetime
         df_novo['data_coleta'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print(f"-> Download OK: {len(df_novo)} pilotos.")
+        print(f"-> Download OK: {len(df_novo)} registros.")
 
     except Exception as e:
-        print(f"ERRO NO DOWNLOAD: {e}")
+        print(f"ERRO NO DOWNLOAD/LEITURA: {e}")
         return
 
-    # 4. Consolidação
-    if not df_db.empty:
-        # Garante que a coluna ID existe antes de setar index
-        if COLUNA_ID in df_novo.columns and COLUNA_ID in df_db.columns:
-            df_db.set_index(COLUNA_ID, inplace=True)
-            df_novo.set_index(COLUNA_ID, inplace=True)
-            
-            df_db.update(df_novo)
-            novos = df_novo[~df_novo.index.isin(df_db.index)]
-            
-            df_final = pd.concat([df_db, novos])
-            df_final.reset_index(inplace=True)
-        else:
-            print(f"AVISO: Coluna ID '{COLUNA_ID}' não encontrada. Substituindo tudo.")
-            df_final = df_novo
+    # 3. Consolidação (Upsert)
+    if not df_db.empty and COLUNA_ID in df_db.columns:
+        df_db.set_index(COLUNA_ID, inplace=True)
+        df_novo.set_index(COLUNA_ID, inplace=True)
+        
+        df_db.update(df_novo)
+        novos = df_novo[~df_novo.index.isin(df_db.index)]
+        
+        df_final = pd.concat([df_db, novos])
+        df_final.reset_index(inplace=True)
     else:
         df_final = df_novo
 
-    # 5. Salvar
+    # 4. Salvar
     print("Salvando no Aiven...")
     try:
-        df_final.to_sql(
-            TABELA_NOME, 
-            engine, 
-            if_exists='replace', 
-            index=False, 
-            chunksize=500
-        )
-        print("-> SUCESSO TOTAL! FIM.")
+        # Novamente desativa a trava antes de salvar (garantia)
+        with engine.connect() as conn:
+            conn.execute(text("SET SESSION sql_require_primary_key = 0"))
+            
+            df_final.to_sql(
+                TABELA_NOME, 
+                conn, # Usa a conexão com a sessão configurada
+                if_exists='replace', 
+                index=False, 
+                chunksize=500
+            )
+        print("-> SUCESSO TOTAL!")
     except Exception as e:
         print(f"ERRO AO SALVAR: {e}")
 
