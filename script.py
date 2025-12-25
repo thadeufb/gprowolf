@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 # --- CONFIGURAÇÕES ---
 DATABASE_URL = os.getenv('DATABASE_URL')
-URL_DADOS = "https://gproworld.org/download/pilotos.csv.gz" # CONFIRME SE O LINK É ESSE
+URL_DADOS = "https://www.gpro.net/gb/GetMarketFile.asp?market=drivers&type=csv" # CONFIRME SE O LINK É ESSE
 TABELA_NOME = "mercado_pilotos"
 COLUNA_ID = "id_piloto" 
 
