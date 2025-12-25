@@ -18,11 +18,14 @@ def get_engine():
     if not DATABASE_URL:
         raise ValueError("A variável de ambiente DATABASE_URL não foi encontrada.")
     
-    # Configuração específica para Aiven (SSL)
-    # connect_args={'ssl': {'check_hostname': False}} permite conectar via SSL 
-    # sem precisar baixar o arquivo de certificado CA manualmente no GitHub.
+    # --- CORREÇÃO DE ERRO SSL ---
+    # O Aiven manda a URL com '?ssl-mode=REQUIRED', mas o driver PyMySQL
+    # não aceita esse parâmetro na URL, ele prefere receber via connect_args.
+    # Vamos cortar qualquer coisa que venha depois de '?' no link.
+    url_limpa = DATABASE_URL.split("?")[0]
+    
     return create_engine(
-        DATABASE_URL, 
+        url_limpa, 
         connect_args={'ssl': {'check_hostname': False}}
     )
 
