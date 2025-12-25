@@ -3,13 +3,13 @@ name: Atualizacao Diaria Aiven
 on:
   schedule:
     - cron: '0 9 * * *' # Roda todo dia as 09:00 UTC
-  workflow_dispatch:
+  workflow_dispatch: # Permite rodar manualmente para testar
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
     steps:
-      - name: Baixar código
+      - name: Baixar código (Checkout)
         uses: actions/checkout@v3
 
       - name: Configurar Python
@@ -23,6 +23,5 @@ jobs:
 
       - name: Rodar Script
         env:
-          # Aqui ele pega o segredo que criamos e injeta no script
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python script.py
