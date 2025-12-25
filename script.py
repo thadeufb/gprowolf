@@ -125,6 +125,7 @@ def main():
                 index=False, 
                 chunksize=500
             )
+        conn.commit()
         print("-> SUCESSO TOTAL!")
     except Exception as e:
         print(f"ERRO AO SALVAR: {e}")
